@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  redis:
+    container_name: redis
+    image: redis:latest
+    restart: always
+    ports:
+      - "6379:6379"
+
+  clitool:
+    container_name: clitool
+    image: clitool
+    build: .
+    depends_on:
+      - redis
