@@ -1,135 +1,146 @@
-const Promise = require("bluebird");
-const redis = require("redis");
-const inquirer = require('inquirer');
+import Promise from 'bluebird';
+import redis from 'redis';
+import inquirer from 'inquirer';
+import dotenv from 'dotenv';
 
-var summary = "";
-var questions = [];
+if (process.env.NODE_ENV === 'production') {
+  dotenv.config({ path: '.env' });
+} else {
+  dotenv.config({ path: '.env-dev' });
+}
+
+const redisClient = redis.createClient({
+  socket: {
+    port: 6379,
+    host: process.env.REDIS_HOST,
+  },
+});
+
+let main = () => {};
+let summary = '';
 
 const getAnswer = async (opt) => {
-	let { type } = opt;
-	let { answer } = await inquirer.prompt(opt);
+  const { type } = opt;
+  const { answer } = await inquirer.prompt(opt);
 
-	if ((type === 'number' && answer > 0) || (type === 'input' && answer.trim())) {
-		return answer;
-	} else {
-		return await getAnswer(opt);
-	}
+  if ((type === 'number' && answer > 0) || (type === 'input' && answer.trim())) {
+    return answer;
+  }
+
+  return getAnswer(opt);
 };
 
 const generateArray = async (nb, uid, msg) => {
-	let res = [];
+  const res = [];
 
-	if (uid == "staff_nb") {
-		await Promise.mapSeries(new Array(nb).fill(0), (val, i) => {
-			res.push([{
-				type: "input",
-				name: "answer",
-				message: `${msg}${i + 1} : `,
-				id: `staff_name_${i}`
-			}]);
-		});
-		res.push([{
-			type: "number",
-			name: "answer",
-			message: "Nombre de camion : ",
-			id: "truck_nb",
-			subMessage: "Volume en m³ du camion n°"
-		}]);
-	} else {
-		await Promise.mapSeries(new Array(nb).fill(0), (val, i) => {
-			res.push([{
-				type: "number",
-				name: "answer",
-				message: `${msg}${i + 1} : `,
-				id: `truck_volume_${i}`
-			}],
-			[{
-				type: "input",
-				name: "answer",
-				message: `Type de camion n°${i + 1} : `,
-				id: `truck_type_${i}`
-			}],
-			);
-		});
-	}
-	return res;
+  if (uid === 'staff_nb') {
+    await Promise.mapSeries(new Array(nb).fill(0), (val, i) => {
+      res.push([{
+        type: 'input',
+        name: 'answer',
+        message: `${msg}${i + 1} : `,
+        id: `staff_name_${i}`,
+      }]);
+    });
+    res.push([{
+      type: 'number',
+      name: 'answer',
+      message: 'Nombre de camion : ',
+      id: 'truck_nb',
+      subMessage: 'Volume en m³ du camion n°',
+    }]);
+  } else {
+    await Promise.mapSeries(new Array(nb).fill(0), (val, i) => {
+      res.push(
+        [{
+          type: 'number',
+          name: 'answer',
+          message: `${msg}${i + 1} : `,
+          id: `truck_volume_${i}`,
+        }],
+        [{
+          type: 'input',
+          name: 'answer',
+          message: `Type de camion n°${i + 1} : `,
+          id: `truck_type_${i}`,
+        }],
+      );
+    });
+  }
+  return res;
 };
 
+const core = async (coreQuestions) => Promise.mapSeries(coreQuestions, async (question) => {
+  const { id, message, subMessage } = question[0];
+  let answer = await redisClient.get(id);
 
-const core = async (questions) => {
-	return Promise.mapSeries(questions, async (question) => {
-		question = question[0];
-		let answer = await redisClient.get(question.id);
+  if (answer) {
+    console.log(`? ${message}${answer}`);
+  } else {
+    answer = await getAnswer(question[0]);
+    redisClient.set(id, answer.toString());
+  }
+  summary += `${message}${answer.toString()}\n`;
 
-		if (answer) {
-			console.log(`? ${question.message}${answer}`);
-		} else {
-			answer = await getAnswer(question);
-			let redisRes = redisClient.set(question.id, answer.toString());
-		}
-		summary += `${question.message}${answer.toString()}\n`;
-
-		if (question.id == "staff_nb" || question.id == "truck_nb") {
-			questions = await generateArray(parseInt(answer), question.id, question.subMessage);
-			await core(questions);
-		}
-	});
-};
+  if (id === 'staff_nb' || id === 'truck_nb') {
+    const questions = await generateArray(parseInt(answer, 10), id, subMessage);
+    await core(questions);
+  }
+});
 
 const summarize = async () => {
-	let { answer } = await inquirer.prompt([{ name: "answer", message: "Les informations sont elles valides ? (y/n): "}]);
-	
-	if (answer == "y") {
-		console.log("\nMerci, informations envoyées...\n\n");
-		await redisClient.flushAll();
-		main();
-	} else if (answer == "n") {
-		console.log("\n\n");
-		await redisClient.flushAll();
-		main();
-	} else {
-		await summarize();
-	}
+  const { answer } = await inquirer.prompt([{ name: 'answer', message: 'Les informations sont elles valides ? (y/n): ' }]);
+
+  if (answer === 'y') {
+    console.log('\nMerci, informations envoyées...\n\n');
+    await redisClient.flushAll();
+    main();
+  } else if (answer === 'n') {
+    console.log('\n\n');
+    await redisClient.flushAll();
+    main();
+  } else {
+    await summarize();
+  }
 };
 
-const main = async () => {
-	questions = [
-		[{
-			type: 'input',
-			name: "answer",
-			message: "Nom de l'utilisateur: ",
-			id: "user_name"
-		}],
-		[{
-			type: "input",
-			name: "answer",
-			message: "Nom de la société: ",
-			id: "company_name"
-		}],
-		[{
-			type: "number",
-			name: "answer",
-			message: "Nombre d'employés: ",
-			id: "staff_nb",
-			subMessage: "Nom de l'employé n°"
-		}]
-	];
-	console.log("-------- Outil d'enregistrement --------")
+main = async () => {
+  const questions = [
+    [{
+      type: 'input',
+      name: 'answer',
+      message: "Nom de l'utilisateur: ",
+      id: 'user_name',
+    }],
+    [{
+      type: 'input',
+      name: 'answer',
+      message: 'Nom de la société: ',
+      id: 'company_name',
+    }],
+    [{
+      type: 'number',
+      name: 'answer',
+      message: "Nombre d'employés: ",
+      id: 'staff_nb',
+      subMessage: "Nom de l'employé n°",
+    }],
+  ];
+  console.log("-------- Outil d'enregistrement --------");
 
-	await core(questions);
-	console.log(`\n---------------------------------------\nRécapitulatif\n\n${summary}---------------------------------------\n`);
-	await summarize();
-	return true;
-}
+  await core(questions);
+  console.log(`\n---------------------------------------\nRécapitulatif\n\n${summary}---------------------------------------\n`);
+  await summarize();
+  return true;
+};
 
-var redisClient = redis.createClient(6379, '127.0.0.1');
 redisClient.connect().then(() => {
-	main();
+  main();
 }).catch((err) => {
-	console.error("ERROR #2432 - Can't connect to REDIS ...");
+  console.error(`ERROR #2432 - Can't connect to REDIS ...\n${err}`);
 });
 
 redisClient.on('error', (err) => {
-	console.log("\n\nERROR database unreachable - Try again later ...");
-	process.exit(1);
+  console.log(`\n\nERROR: REDIS unreachable - Try again later ...\n${err}`);
+  process.exit(1);
 });
